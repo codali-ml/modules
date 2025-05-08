@@ -6,12 +6,11 @@ import torch
 from tqdm.auto import tqdm
 
 
-def train_step(model: torch.nn.Module, 
-               dataloader: torch.utils.data.DataLoader, 
-               loss_fn: torch.nn.Module, 
+def train_step(model: torch.nn.Module,
+               dataloader: torch.utils.data.DataLoader,
+               loss_fn: torch.nn.Module,
                optimizer: torch.optim.Optimizer,
                device: torch.device) -> Tuple[float, float]:
-
     """Trains a PyTorch model for a single epoch.
 
     Turns a target PyTorch model to training mode and then
@@ -28,7 +27,7 @@ def train_step(model: torch.nn.Module,
     Returns:
         A tuple of training loss and training accuracy metrics.
         In the form (train_loss, train_accuracy). For example:
-        
+
         (0.1112, 0.8743)
     """
 
@@ -38,7 +37,7 @@ def train_step(model: torch.nn.Module,
         X, y = X.to(device), y.to(device)
         y_pred = model(X)
         loss = loss_fn(y_pred, y)
-        train_loss += loss.item() 
+        train_loss += loss.item()
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
@@ -49,11 +48,10 @@ def train_step(model: torch.nn.Module,
     return train_loss, train_acc
 
 
-def test_step(model: torch.nn.Module, 
-              dataloader: torch.utils.data.DataLoader, 
+def test_step(model: torch.nn.Module,
+              dataloader: torch.utils.data.DataLoader,
               loss_fn: torch.nn.Module,
               device: torch.device) -> Tuple[float, float]:
-
     """Tests a PyTorch model for a single epoch.
 
     Turns a target PyTorch model to "eval" mode and then performs
@@ -68,11 +66,11 @@ def test_step(model: torch.nn.Module,
     Returns:
         A tuple of testing loss and testing accuracy metrics.
         In the form (test_loss, test_accuracy). For example:
-        
+
         (0.0223, 0.8985)
     """
 
-    model.eval() 
+    model.eval()
     test_loss, test_acc = 0, 0
     with torch.inference_mode():
         for batch, (X, y) in enumerate(dataloader):
@@ -81,20 +79,21 @@ def test_step(model: torch.nn.Module,
             loss = loss_fn(test_pred_logits, y)
             test_loss += loss.item()
             test_pred_labels = test_pred_logits.argmax(dim=1)
-            test_acc += ((test_pred_labels == y).sum().item()/len(test_pred_labels))
+            test_acc += ((test_pred_labels == y).sum().item() /
+                         len(test_pred_labels))
     test_loss = test_loss / len(dataloader)
     test_acc = test_acc / len(dataloader)
     return test_loss, test_acc
 
 
-def train(model: torch.nn.Module, 
-        train_dataloader: torch.utils.data.DataLoader, 
-        test_dataloader: torch.utils.data.DataLoader, 
-        optimizer: torch.optim.Optimizer,
-        loss_fn: torch.nn.Module,
-        epochs: int,
-        device: torch.device) -> Dict[str, List[float]]:
-
+def train(model: torch.nn.Module,
+          train_dataloader: torch.utils.data.DataLoader,
+          test_dataloader: torch.utils.data.DataLoader,
+          optimizer: torch.optim.Optimizer,
+          loss_fn: torch.nn.Module,
+          epochs: int,
+          device: torch.device,
+          writer: torch.utils.tensorboard.writer.SummaryWriter) -> Dict[str, List[float]]:
     """Trains and tests a PyTorch model.
 
     Passes a target PyTorch models through train_step() and test_step()
@@ -111,6 +110,7 @@ def train(model: torch.nn.Module,
         loss_fn: A PyTorch loss function to calculate loss on both datasets.
         epochs: An integer indicating how many epochs to train for.
         device: A target device to compute on (e.g. "cuda" or "cpu").
+        writer: A SummaryWriter() instance to log model results to.
 
     Returns:
         A dictionary of training and testing loss as well as training and
@@ -128,10 +128,10 @@ def train(model: torch.nn.Module,
     """
 
     results = {"train_loss": [],
-        "train_acc": [],
-        "test_loss": [],
-        "test_acc": []
-        }
+               "train_acc": [],
+               "test_loss": [],
+               "test_acc": []
+               }
     for epoch in tqdm(range(epochs)):
         train_loss, train_acc = train_step(model=model,
                                            dataloader=train_dataloader,
@@ -154,4 +154,62 @@ def train(model: torch.nn.Module,
         results["test_loss"].append(test_loss)
         results["test_acc"].append(test_acc)
 
+        if writer:
+            # Add results to SummaryWriter
+            writer.add_scalars(main_tag="Loss",
+                               tag_scalar_dict={"train_loss": train_loss,
+                                                "test_loss": test_loss},
+                               global_step=epoch)
+            writer.add_scalars(main_tag="Accuracy",
+                               tag_scalar_dict={"train_acc": train_acc,
+                                                "test_acc": test_acc},
+                               global_step=epoch)
+
+        # Close the writer
+            writer.close()
+        else:
+            pass
     return results
+
+
+def create_writer(experiment_name: str,
+                  model_name: str,
+                  extra: str = None) -> torch.utils.tensorboard.writer.SummaryWriter():
+    """Creates a torch.utils.tensorboard.writer.SummaryWriter() instance saving to a specific log_dir.
+
+    log_dir is a combination of runs/timestamp/experiment_name/model_name/extra.
+
+    Where timestamp is the current date in YYYY-MM-DD format.
+
+    Args:
+        experiment_name (str): Name of experiment.
+        model_name (str): Name of model.
+        extra (str, optional): Anything extra to add to the directory. Defaults to None.
+
+    Returns:
+        torch.utils.tensorboard.writer.SummaryWriter(): Instance of a writer saving to log_dir.
+
+    Example usage:
+        # Create a writer saving to "runs/2022-06-04/data_10_percent/effnetb2/5_epochs/"
+        writer = create_writer(experiment_name="data_10_percent",
+                               model_name="effnetb2",
+                               extra="5_epochs")
+        # The above is the same as:
+        writer = SummaryWriter(log_dir="runs/2022-06-04/data_10_percent/effnetb2/5_epochs/")
+    """
+    from datetime import datetime
+    import os
+
+    # Get timestamp of current date (all experiments on certain day live in same folder)
+    # returns current date in YYYY-MM-DD format
+    timestamp = datetime.now().strftime("%Y-%m-%d")
+
+    if extra:
+        # Create log directory path
+        log_dir = os.path.join(
+            "runs", timestamp, experiment_name, model_name, extra)
+    else:
+        log_dir = os.path.join("runs", timestamp, experiment_name, model_name)
+
+    print(f"[INFO] Created SummaryWriter, saving to: {log_dir}...")
+    return SummaryWriter(log_dir=log_dir)
